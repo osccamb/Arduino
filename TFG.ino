@@ -1,52 +1,59 @@
 #include <Servo.h>
 #include <LiquidCrystal.h>
 #include <Wire.h>
+#include <SD.h>
 
 Servo myservo;
 
-// Cycle system variables
-float max_deg = 180;
-float min_deg = 0;
-float pos = 0;  // servo position variable
+File myFile;  // Create servo object
 
-float step = 1;           // degree variation per loop
-float step_time = 10;     // time between each loop of the arduino
-float cycle_time = 1000;  // time between the start of one cycle and another
-int num_cycles = 3000;     // cycles to perform
-bool running = false;     // finish the experiment after completing the cycles
-float time_left = 1 + ((1120 + cycle_time) * num_cycles) / 1000.0 + (num_cycles * step_time * (max_deg - min_deg) / (1000.0 * step));
-float time_total = time_left;
-float time_cycle = (1120 + cycle_time) / 1000.0 + step_time * (max_deg - min_deg) / (1000.0 * step);
+// Cycle system variables, change accordingly
+float max_deg = 180;  // Maximum degree the servo will rotate to
+float min_deg = 90;   // Minimum degree the servo will rotate to
+float pos = 0;        // Servo position variable
+
+float step = 1;                                                                                                                        // Degree variation per loop
+float step_time = 1;                                                                                                                   // Time between each loop in milliseconds
+float cycle_time = 0;                                                                                                                  // Time between the start of one cycle and another
+int num_cycles = 500;                                                                                                                  // Number of cycles to perform
+bool running = false;                                                                                                                  // Indicates whether the experiment is running
+float time_left = 1 + ((1120 + cycle_time) * num_cycles) / 1000.0 + (num_cycles * step_time * (max_deg - min_deg) / (1000.0 * step));  // Time left for the experiment
+float time_total = time_left;                                                                                                          // Total time of the experiment
+float time_cycle = (1120 + cycle_time) / 1000.0 + step_time * (max_deg - min_deg) / (1000.0 * step);                                   // Time per cycle
+
 // Resistance measurement variables
-//int analogPin = 0;
-//int raw = 0;
-//int Vin = 5;
-//float Vout = 0;
-//float R1 = 10000;  // value of the known resistor
-//float Rm = 0;      // unknown sample resistance
-//float buffer = 0;
+int analogPin = 0;      // Analog pin for reading the voltage
+int raw = 0;            // Raw value from analog read
+int Vin = 5;            // Input voltage
+float Vout = 0;         // Output voltage
+float R1 = 1000;        // Known resistor value
+float Rm = 0;           // Unknown sample resistance
+float R0 = 3400;        // Original resistance of the sample
+float ratio = Rm / R0;  // Ratio of sample resistance to original resistance
+float buffer = 0;       // Buffer for calculations
 
 // LCD variables
-int Contrast = 50;
-LiquidCrystal lcd(12, 11, 5, 4, 3, 2);
-int startButtonPin = 7;    // Pin for starting the experiment
-int pauseButtonPin = 8;    // Pin for pausing or resuming the experiment
-int nextButtonPin = 9;     // Pin for going to the next panel
-bool nextPressed = false;  // prevents to pulse the nextButton various times, causing lag to the servo
-int displayOption = 1;
+int Contrast = 50;                    // Contrast level of the LCD
+LiquidCrystal lcd(8, 7, 5, 4, 3, 2);  // LCD pins configuration
+int startButtonPin = A1;              // Pin for starting the experiment
+int pauseButtonPin = A2;              // Pin for pausing or resuming the experiment
+int nextButtonPin = A3;               // Pin for going to the next display option
+bool nextPressed = false;             // Prevents multiple presses causing lag
+int displayOption = 1;                // Current display option
 
 void setup() {
-  myservo.attach(13);
+  myservo.attach(A4);  // Attach the servo to pin A4
 
   pinMode(startButtonPin, INPUT_PULLUP);
   pinMode(pauseButtonPin, INPUT_PULLUP);
   pinMode(nextButtonPin, INPUT_PULLUP);
 
-  analogWrite(6, Contrast);
-  lcd.begin(16, 2);
-  Serial.begin(9600);  // For printing measurements to the monitor
+  analogWrite(6, Contrast);  // Set the LCD contrast
+  lcd.begin(16, 2);          // Initialize the LCD
+  Serial.begin(9600);        // Start serial communication for debugging
 }
 
+// Formats time in seconds into hh:mm:ss format
 void formatTime(float seconds, char* buffer) {
   int hours = seconds / 3600;
   int minutes = (seconds - (hours * 3600)) / 60;
@@ -55,30 +62,59 @@ void formatTime(float seconds, char* buffer) {
 }
 
 void loop() {
+  // Start the experiment if start button is pressed and not already running
   if (digitalRead(startButtonPin) == LOW && !running) {
-    running = true;
+    running = true;  // Start the experiment
     lcd.setCursor(0, 0);
-    lcd.print("Measuring...       ");  // Ensure the length of the text matches the space available on the LCD
+    lcd.print("Measuring...       ");  // Ensure the text fits the LCD
     time_left = time_total - 1 + time_cycle;
-    delay(1000);  // Delay to debounce the button
+    delay(1000);  // Debounce delay
   }
 
   while (running) {
-    for (int cycles = 1; cycles <= num_cycles; cycles++) {
-      Serial.println(cycles);
-      time_left = time_left - time_cycle;
+    if (!SD.begin(9)) {  // Initialize SD card
+      Serial.println("initialization failed!");
+      while (1)
+        ;
+    }
+    Serial.println("initialization done.");
+
+    myFile = SD.open("TFG.txt", FILE_WRITE);  // Open file for writing
+
+    if (!myFile) {  // Check if file opened successfully
+      Serial.println("error opening TFG.txt");
+      while (1)
+        ;
+    }
+
+    for (int cycles = 1; cycles <= num_cycles; cycles++) {  // Loop through cycles
+      time_left -= time_cycle;                              // Update remaining time
       char time_buffer[9];
-      formatTime(time_left, time_buffer);
+      formatTime(time_left, time_buffer);  // Format remaining time
+      Serial.println(time_left);           // Print remaining time to serial
+      raw = analogRead(analogPin);         // Read analog value
+      if (raw != 0) {
+        buffer = raw * Vin;
+        Vout = buffer / 1024.0;  // Calculate output voltage
+        buffer = (Vin / Vout) - 1;
+        Rm = R1 * buffer;  // Calculate unknown resistance
+        ratio = Rm / R0;   // Calculate resistance ratio
+      }
+
+      // Write ratio and cycle to SD card
+      myFile.print(cycles);
+      myFile.print(" ");
+      myFile.println(ratio);
+
       // Servo movement from min to max
       for (pos = min_deg; pos <= max_deg; pos += step) {
         myservo.write(pos);
         delay(step_time);
         if (digitalRead(pauseButtonPin) == LOW) {
           lcd.setCursor(0, 0);
-          lcd.print("Paused            ");  // Ensure the length of the text matches the space available on the LCD
+          lcd.print("Stopped          ");  // Ensure the length of the text matches the space available on the LCD
           lcd.setCursor(0, 1);
           lcd.print("           ");
-          //Serial.println("Pause");
           running = false;
           break;  // Exit the servo movement loop
         }
@@ -86,36 +122,38 @@ void loop() {
         if (digitalRead(nextButtonPin) == LOW && !nextPressed) {
           lcd.clear();
           displayOption++;
-          //Serial.println("Next Panel");
-          nextPressed = true;
+          nextPressed = true;  // Prevent multiple presses
         } else if (displayOption % 3 == 2) {
           lcd.setCursor(0, 0);
           lcd.print("R/R0 (Ohm):");  // Ensure the length of the text matches the space available on the LCD
           lcd.setCursor(0, 1);
-          lcd.print("Falta");
+          lcd.print(ratio);
 
-        } else if (displayOption % 3 == 0) {
+        } else if (displayOption % 3 == 1) {
           lcd.setCursor(0, 0);
-          lcd.print("Ciclo/");  // Ensure the length of the text matches the space available on the LCD
+          lcd.print("Cycle/");  // Ensure the length of the text matches the space available on the LCD
           lcd.setCursor(0, 1);
           lcd.print(cycles);
           lcd.setCursor(6, 0);
           lcd.print(num_cycles);
-        } else if (displayOption % 3 == 1) {
+
+        } else if (displayOption % 3 == 0) {
           lcd.setCursor(0, 0);
-          lcd.print("Falta (hh:mm:ss):");  // Ensure the length of the text matches the space available on the LCD
+          lcd.print("Left (hh:mm:ss):");  // Ensure the length of the text matches the space available on the LCD
           lcd.setCursor(0, 1);
           lcd.print(time_buffer);
         }
       }
+      nextPressed = false;
       if (!running)
         break;                 // Exit the cycles loop if paused
       myservo.write(min_deg);  // Return the servo to its initial position
-      nextPressed = false;
-      delay(cycle_time);
     }
+    myFile.close();  // Close the file after finishing all cycles
+    lcd.setCursor(0, 0);
+    lcd.print("Finished    ");
     lcd.setCursor(0, 1);
-    lcd.print("Finalizado    ");
+    lcd.print("              ");
     running = false;  // Finish the cycles
   }
 }
