@@ -1,0 +1,1 @@
+This repository contains the code and documentation for my Final Degree Project, which involves a system designed to perform controlled flexions on thin samples of conductive materials. The system is built using Arduino and can be adapted for various testing purposes, especially in material science and electronics research.
